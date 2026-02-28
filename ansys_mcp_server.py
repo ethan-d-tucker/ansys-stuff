@@ -1299,6 +1299,247 @@ def run_apdl_commands(commands: list[str]) -> str:
     return _r({"results": results})
 
 
+# ===========================  MIL-STD-810H TOOLS  ============================
+
+@mcp.tool()
+def get_milstd_profiles() -> str:
+    """List all available MIL-STD-810H vibration environment profiles.
+
+    Returns profile IDs, names, Grms levels, frequency ranges, and
+    MIL-STD references.
+    """
+    from mil_std_profiles import get_all_profiles
+    profiles = get_all_profiles()
+    summary = []
+    for pid, p in profiles.items():
+        summary.append({
+            "id": pid,
+            "name": p["name"],
+            "mil_std_ref": p["mil_std_ref"],
+            "requirement_id": p["requirement_id"],
+            "freq_range_hz": f"{p['psd_table'][0][0]}-{p['psd_table'][-1][0]}",
+            "grms": p["grms"],
+            "duration_min_per_axis": p["duration_min_per_axis"],
+            "description": p["description"],
+        })
+    return _r({"profiles": summary})
+
+
+@mcp.tool()
+def get_material_library() -> str:
+    """List all materials with elastic properties and strength allowables.
+
+    Returns material keys, names, elastic constants, and failure strengths.
+    """
+    from material_library import MATERIAL_LIBRARY
+    result = {}
+    for key, mat in MATERIAL_LIBRARY.items():
+        elastic = mat["elastic"]
+        strength = mat["strength"]
+        result[key] = {
+            "name": mat["name"],
+            "description": mat.get("description", ""),
+            "elastic_GPa": {
+                k: v / 1e9 if k.startswith(("E", "G")) else v
+                for k, v in elastic.items()
+            },
+            "strength_MPa": {k: v / 1e6 for k, v in strength.items()},
+        }
+    return _r({"materials": result})
+
+
+@mcp.tool()
+def get_default_layup() -> str:
+    """Return the default composite layup for user review before simulation.
+
+    Presents the stacking sequence, ply details, and summary so the user
+    can confirm or request modifications.
+    """
+    from material_library import get_default_layup as _get_layup, get_layup_summary
+    layup = _get_layup()
+    summary = get_layup_summary(layup)
+    plies = []
+    for p in layup:
+        mat_short = "Carbon/Epoxy" if "carbon" in p["mat"] else "Honeycomb Core"
+        plies.append({
+            "ply": p.get("ply", ""),
+            "material": mat_short,
+            "material_key": p["mat"],
+            "thickness_mm": p["thickness_mm"],
+            "angle_deg": p["angle"],
+            "role": p.get("role", ""),
+        })
+    return _r({"layup": plies, "summary": summary})
+
+
+@mcp.tool()
+def run_milstd_psd_analysis(
+    geometry_file: str,
+    part_name: str = "Composite Part",
+    profile_ids: str = "MIN_INTEGRITY,HELICOPTER,JET_AIRCRAFT",
+    material_name: str = "carbon_epoxy_woven",
+    element_size: float = 0.003,
+    damping_ratio: float = 0.02,
+    num_modes: int = 20,
+    freq_end: float = 3000.0,
+    required_fos: float = 1.5,
+    output_dir: Optional[str] = None,
+) -> str:
+    """Run complete MIL-STD-810H multi-environment PSD analysis.
+
+    Performs modal solve once, then PSD for each environment x 3 axes.
+    Computes composite failure indices (Tsai-Wu + Max Stress).
+    Generates a professional DOCX report.
+
+    Args:
+        geometry_file: Path to CAD file (Parasolid .x_t or STEP .stp).
+        part_name: Human-readable name for the report title.
+        profile_ids: Comma-separated MIL-STD profile IDs
+            (MIN_INTEGRITY, TRUCK_TRANSPORT, HELICOPTER, JET_AIRCRAFT).
+        material_name: Material library key (default: carbon_epoxy_woven).
+        element_size: Mesh element size in metres (default: 0.003).
+        damping_ratio: Modal damping ratio (default: 0.02 = 2%).
+        num_modes: Number of modes to extract (default: 20).
+        freq_end: Upper frequency bound in Hz (default: 3000).
+        required_fos: Required factor of safety (default: 1.5).
+        output_dir: Output directory for report and images.
+    """
+    from material_library import get_material as _get_mat, get_elastic_props, get_default_layup as _get_layup
+    from mil_std_profiles import get_profile
+    from simulation_engine import SimulationConfig, run_multi_environment
+    from composite_failure import compute_failure_indices, compute_core_failure
+    from milstd_report import generate_milstd_report
+
+    pids = [p.strip() for p in profile_ids.split(",")]
+    profiles = [get_profile(pid) for pid in pids]
+
+    if output_dir is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(script_dir, "report_output")
+
+    # Resolve geometry path
+    geo_path = geometry_file
+    if not os.path.isabs(geo_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        geo_path = os.path.join(script_dir, geo_path)
+
+    elastic = get_elastic_props(material_name)
+    mat_info = _get_mat(material_name)
+    layup = _get_layup()
+
+    config = SimulationConfig(
+        geometry_file=geo_path,
+        part_name=part_name,
+        element_size=element_size,
+        material_props=elastic,
+        material_name=mat_info["name"],
+        damping_ratio=damping_ratio,
+        num_modes=num_modes,
+        freq_end=freq_end,
+    )
+
+    # Run simulations
+    mapdl, modal_data, env_results = run_multi_environment(
+        config, profiles, axes=["X", "Y", "Z"]
+    )
+
+    # Failure analysis
+    failure_data = {}
+    core_failure_data = {}
+    for pid, axes_data in env_results.items():
+        for axis, psd_res in axes_data.items():
+            fr = compute_failure_indices(
+                psd_res.stress_sx, psd_res.stress_sy, psd_res.stress_sxy,
+                layup=layup, required_fos=required_fos,
+            )
+            failure_data[(pid, axis)] = fr
+            cf = compute_core_failure(
+                psd_res.stress_sz, psd_res.stress_sxz, psd_res.stress_syz,
+            )
+            core_failure_data[(pid, axis)] = cf
+
+    # Generate report
+    report_path = generate_milstd_report(
+        modal_data=modal_data,
+        env_results=env_results,
+        failure_data=failure_data,
+        core_failure_data=core_failure_data,
+        profiles=profiles,
+        layup=layup,
+        material_info=mat_info,
+        config=config,
+        output_dir=output_dir,
+        required_fos=required_fos,
+    )
+
+    # Cleanup MAPDL
+    try:
+        mapdl.finish()
+        mapdl.exit()
+    except Exception:
+        pass
+
+    # Summary
+    min_fos_tw = min(fr.min_fos_tw for fr in failure_data.values())
+    min_fos_ms = min(fr.min_fos_ms for fr in failure_data.values())
+    overall_pass = min_fos_tw >= required_fos and min_fos_ms >= required_fos
+
+    return _r({
+        "report_path": report_path,
+        "overall_pass": overall_pass,
+        "overall_result": "PASS" if overall_pass else "FAIL",
+        "min_fos_tsai_wu": round(min_fos_tw, 2),
+        "min_fos_max_stress": round(min_fos_ms, 2),
+        "required_fos": required_fos,
+        "environments_tested": len(profiles),
+        "total_psd_cases": len(profiles) * 3,
+        "modes_extracted": modal_data.n_modes,
+    })
+
+
+@mcp.tool()
+def compute_composite_failure_standalone(
+    material_name: str = "carbon_epoxy_woven",
+    required_fos: float = 1.5,
+) -> str:
+    """Compute Tsai-Wu and Max Stress failure indices from current ANSYS results.
+
+    Call this after a PSD analysis has been run.  Reads stress results from
+    the active MAPDL session and evaluates composite failure for the default
+    layup.
+
+    Args:
+        material_name: Material library key for strength allowables.
+        required_fos: Required factor of safety (default: 1.5).
+    """
+    m = _get_mapdl()
+    from material_library import get_default_layup as _get_layup
+    from composite_failure import compute_failure_indices
+
+    layup = _get_layup()
+
+    m.post1()
+    try:
+        sx = m.post_processing.nodal_component_stress("X")
+        sy = m.post_processing.nodal_component_stress("Y")
+        sxy = m.post_processing.nodal_component_stress("XY")
+    except Exception as e:
+        return _r({"error": f"Could not read stress results: {e}"})
+    m.finish()
+
+    fr = compute_failure_indices(sx, sy, sxy, layup=layup, required_fos=required_fos)
+
+    return _r({
+        "max_tsai_wu_index": round(fr.max_tw_index, 6),
+        "max_stress_index": round(fr.max_ms_index, 6),
+        "min_fos_tsai_wu": round(fr.min_fos_tw, 2),
+        "min_fos_max_stress": round(fr.min_fos_ms, 2),
+        "overall_pass_tw": fr.overall_pass_tw,
+        "overall_pass_ms": fr.overall_pass_ms,
+        "meets_required_fos": fr.min_fos_tw >= required_fos and fr.min_fos_ms >= required_fos,
+    })
+
+
 # ===========================  ENTRY POINT  ==================================
 
 if __name__ == "__main__":

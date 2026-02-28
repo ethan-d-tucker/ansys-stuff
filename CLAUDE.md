@@ -4,12 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ANSYS composite random vibration (PSD) analysis project for a heavy-duty wrench with sandwich composite construction. Four main components:
+ANSYS composite random vibration (PSD) analysis project. Supports dynamic part selection and MIL-STD-810H multi-environment qualification with composite failure analysis.
 
-1. **`ansys_mcp_server.py`** — FastMCP server exposing 30+ ANSYS MAPDL tools for interactive Claude-driven FEA workflows
-2. **`composite_random_vibration.py`** — Standalone end-to-end analysis script (geometry -> materials -> mesh -> modal -> PSD -> results). Uses ANF fallback for geometry import (has known issues, see below)
-3. **`run_simulation.py`** — Working end-to-end simulation using all debugged/validated methods. **Use this script for actual runs.**
-4. **`run_and_report.py`** — Full simulation + DOCX report generator. Runs the PSD analysis, captures ~30 PyVista 3D contour screenshots (mesh, mode shapes, 1-sigma stress/displacement from multiple angles), generates matplotlib charts, and builds a professional Word report. **Use this for reports.**
+### Primary workflow (MIL-STD-810H)
+1. **`run_milstd_analysis.py`** — **Main entry point.** Multi-environment PSD analysis per MIL-STD-810H Method 514.8. Modal solve once, PSD for each environment x 3 axes, composite failure analysis (Tsai-Wu + Max Stress + FoS), generates professional DOCX report. Accepts any Parasolid/STEP geometry.
+2. **`ansys_mcp_server.py`** — FastMCP server exposing 35+ ANSYS MAPDL tools for interactive Claude-driven FEA. Includes MIL-STD tools: `get_milstd_profiles()`, `get_material_library()`, `get_default_layup()`, `run_milstd_psd_analysis()`, `compute_composite_failure_standalone()`.
+
+### Supporting modules
+3. **`simulation_engine.py`** — Parameterised simulation core. `SimulationConfig` dataclass, ac4 Parasolid import, SOLID187 mesh, modal solve, PSD SRSS with all 6 stress components. `run_multi_environment()` for batch runs.
+4. **`mil_std_profiles.py`** — MIL-STD-810H Method 514.8 vibration environment definitions (4 profiles: General Minimum Integrity, Truck Transport, Helicopter, Jet Aircraft).
+5. **`material_library.py`** — Material database with elastic properties (for ANSYS) and strength allowables (for failure analysis). Default 21-ply all-carbon symmetric laminate.
+6. **`composite_failure.py`** — Tsai-Wu and Max Stress failure analysis engine. Ply-by-ply stress rotation, FoS computation, core failure check.
+7. **`milstd_report.py`** — MIL-STD-810H tailored DOCX report generator with requirements traceability, failure assessment, compliance matrix.
+
+### Legacy / reference scripts
+8. **`run_simulation.py`** — Original single-config PSD analysis (hardcoded wrench). Still works standalone.
+9. **`run_and_report.py`** — Original simulation + DOCX report (hardcoded wrench, ~30 images).
+10. **`composite_random_vibration.py`** — Legacy script (broken ANF/SOLID186 approach, do not use).
 
 Supporting files: `generate_plots.py` (matplotlib visualization), `generate_report.py` (HTML report generator), `psd_curve.csv` (input spectrum), `WrenchParasolid.x_t` (primary CAD geometry), `heavyDutyWrench.iges` (IGES fallback), `anf_commands.json` (ANF geometry fallback — has broken topology, avoid).
 
@@ -24,20 +35,48 @@ Supporting files: `generate_plots.py` (matplotlib visualization), `generate_repo
 ## Running
 
 ```bash
-# Working simulation (recommended)
+# MIL-STD-810H multi-environment analysis (recommended)
+"C:/Users/Ethan/AppData/Local/Programs/Python/Python311/python.exe" run_milstd_analysis.py \
+    --geometry WrenchParasolid.x_t \
+    --part-name "Heavy-Duty Wrench" \
+    --profiles MIN_INTEGRITY,HELICOPTER,JET_AIRCRAFT
+# Output: report_output/MIL_STD_810H_PSD_Report.docx
+
+# All profiles: MIN_INTEGRITY, TRUCK_TRANSPORT, HELICOPTER, JET_AIRCRAFT
+# Options: --element-size 0.003 --damping 0.02 --required-fos 1.5
+
+# Legacy: single-config simulation
 "C:/Users/Ethan/AppData/Local/Programs/Python/Python311/python.exe" run_simulation.py
 
-# Full simulation + DOCX report with 3D contour plots (~15s)
+# Legacy: single-config + DOCX report
 "C:/Users/Ethan/AppData/Local/Programs/Python/Python311/python.exe" run_and_report.py
-# Output: report_output/PSD_Analysis_Report.docx (30 images, ~15 pages)
-
-# Generate result plots from hardcoded data
-"C:/Users/Ethan/AppData/Local/Programs/Python/Python311/python.exe" generate_plots.py
 
 # MCP server is auto-launched by Claude Code via .mcp.json
 ```
 
+## Interactive Workflow (via Claude MCP)
+
+1. User specifies geometry file and part name
+2. Claude calls `get_default_layup()` and presents the composite layup for review
+3. User confirms or requests modifications to the layup
+4. Claude calls `get_milstd_profiles()` and presents available MIL-STD environments
+5. User selects which profiles to test
+6. Claude calls `run_milstd_psd_analysis()` — runs modal solve once, PSD per env x 3 axes
+7. Report generated automatically with failure analysis, FoS, compliance matrix
+
 ## Architecture
+
+### MIL-STD-810H Analysis (`run_milstd_analysis.py`)
+- Accepts any Parasolid (.x_t) or STEP (.stp) geometry via `--geometry`
+- Runs modal solve ONCE, then PSD SRSS for each environment x each axis (X, Y, Z)
+- Extracts all 6 stress components per mode (SX, SY, SZ, SXY, SXZ, SYZ) for failure analysis
+- Modal participation factors weight each mode's response by excitation direction (direction-dependent PSD)
+- Composite failure via `composite_failure.py`: Tsai-Wu + Max Stress criteria, ply-by-ply stress rotation
+- Factors of safety computed per node per ply (free nodes only — excludes BC singularities); worst (critical) ply identified
+- Core failure check runs only when layup contains core material
+- DOCX report via `milstd_report.py`: 9 sections, requirements traceability matrix, compliance matrix
+- 4 MIL-STD profiles available: MIN_INTEGRITY (REQ-VIB-001), TRUCK_TRANSPORT (REQ-VIB-002), HELICOPTER (REQ-VIB-003), JET_AIRCRAFT (REQ-VIB-004)
+- Typical run: ~10-20s depending on mesh density and number of profiles
 
 ### Working Simulation (`run_simulation.py`)
 - Imports Parasolid geometry via `ac4para.exe` converter with `P_SCHEMA` env var
