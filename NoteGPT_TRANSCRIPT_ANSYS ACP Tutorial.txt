@@ -1,0 +1,90 @@
+00:00:00
+so what we're going to be doing today is learning how to do laminate finite element analysis using ANSYS workbench for this for this tutorial we're going to be using ANSYS acp which stands for ANSYS composite prep post and that's just an add-on for ANSYS workbench so then load up workbench 18.1 and then we're gonna start by dragging over the ACP pre module into the workspace so first of all we need to setup our engineering data this includes the all the composite materials that we're gonna
+
+00:00:46
+be using so you know double click on that and then up here in the upper left click on engineering data sources and we're gonna scroll down to composite materials double click on that and then you'll see all the options for materials listed down below for our analysis we're going to be using epoxy carbon woven prepreg so add that and then honeycomb as well go back to the project and now we can start to import our geometry a few things to keep in mind before doing this is that workbench works very well
+
+00:01:31
+with para solid and STL files so we're going to use a pair of solid for this example in addition ACP works for either solid or shell elements for thinner laminate structures shell elements work better so we're going to focus on that but solids work as well so we're going to right click on the geometry section then import geometry and I'm gonna import my pair of solid file this is going to be just a very simple box with some rounded edges and drafts on the side so now that we've loaded the geometry we can load
+
+00:02:12
+the model and this will load mechanical so we can mesh and I defined thicknesses and such so now that mechanical is loaded you can see that we have our little box or tub here know what we need to do first is ANSYS wants a thickness for this part the thickness does not end up really mattering at all because I will answer a CP will will reset that thickness and apply the the correct thickness later on but we'll just set it to 3 millimeters how about and then we need to mesh this there are many different meshing options
+
+00:02:56
+such as like face sizing or refinement but we'll just do a really simple mesh by going under quality and then setting the target quality right here to 0.95 then to actually match this part we're going to click generate mesh under the mesh tab and toolbar so you can see it's a pretty basic mesh nothing too fantastic but it'll work for what we need there are definitely more advanced meshing options that you'd want to go into for a more complicated part next we want to create some named selections for
+
+00:03:38
+this part and as you can see in this geometry there are many different faces that you can hover over but we want to define certain selections of these faces that will be used later in ACP so I'm just going to select the bottom here and then right click and create named selection we'll just call it bottom and I'm going to deselect this bottom part and then create a final name selection for the edges so we can click update project now that we're back in the workspace then we can double click on the setup option here
+
+00:04:33
+this will load a CP pre this will be where we'll be applying all the different materials and material thicknesses and lay up structures and everything apart so first in a CP you can see that is the general UI of it we have our visualization screen here and then all of our different laminate options on the left so first we're going to go into material data open that up and then you can see under materials we have our carbon fiber and honeycomb so we want to create fabrics out of these different materials and you can right
+
+00:05:19
+click on fabrics then create fabric we'll just name this prepreg and the material is going to be the prepreg this thickness is going to be meters so the the nominal thickness of ply a prepreg is going to be about 10 thousandths that's going to be zero point zero zero zero two eight six meters and then I'm going to create another fabric for our honeycomb my taking us on that um we're just going to use a quarter inch thickness but this could be any desired thickness so next we're
+
+00:06:10
+going to create a stack up this basically creates a series of plies so then we don't have to define it later in in the ACP process so with this you just call it stack up and then we can add I'm going to add five different layers of prepreg here I'm going to change the angles on them this just determines the material orientation direction relative to an axis that will set up later so I'm gonna set the first one to zero degrees second one to 45 degrees third to zero degrees and second to 45 this is not
+
+00:06:56
+necessarily an ideal lay up structure but it'll give you an idea for what to start apart like as you can see the lay up sequence is top down which means that the bottom ply will be this first ply and the final ply to be laid will be this last time so as you can see under element sets we have all the elements that were defined in the name selection so what we need to do next is create rosettes which are basically coordinate directions that define how the materials are oriented so we're going to right
+
+00:07:28
+click on rosettes create rosette and I'll just leave that as rosette one and what you can do next is click on the origin box and click anywhere on any of these faces we wanted to find this rosette for the bottom ply so we're gonna click on this bottom face and what these do is they to find material directions where direction one is zero degrees direction two is 90 degrees for this example we don't want the zero degree direction to be in this as you can see from my mouse so we're
+
+00:08:02
+going to orient the zero degree direction in negative Z coordinate direction therefore we have zero degree 90 degree next we're gonna create a second rosette is gonna be for the edges so I'm gonna click on the origin select one of the edges and then we want to do is change that to the same zero direction and we're actually going to change the 90 degree direction to get upwards direction because this ply is going to be facing a different way now that we have those two rosettes we can
+
+00:08:49
+go under oriented selection sets right click on that create an oriented selection set and we're gonna name this one bottom way what an oriented selection set does is it selects the element sets that were defined up here the rosettes that are going down here and then a material stack up orientation so we're gonna call it bottom and the elements that we're gonna create or select is going to be the bottom now the orientation is the direction that the plies are laid on each other so for this
+
+00:09:25
+instance we're gonna click on the point box it select a point on the face as you can see that well purple arrow right here is pointed downward we actually want the materials to be stacked up in this direction so that would be in the positive x-direction so we're going to flip that looking that flip button and then we're gonna click inside of the square brackets again to select the proper rosette that's going to be rosette one as you can see that's the correct row of that and we're all good
+
+00:09:57
+for the bottom next we're going to create a second oriented selection set we're going to call this one all because it's going to be selecting all of the elements again click click inside element sets select the all element set the orientation we're good again click on the face flip it and the rosette is gonna be the same one that we defined before finally we're gonna create a last orient selection set for the edges you can call this edges select the edges element set now the point that we want
+
+00:10:39
+we're gonna click on one of these edges around the sides of the box so let's just define it near where we did the rosette click right there as you can see that is oriented in the opposite direction that we want we want it facing inward so we're just gonna flip that then we're gonna click on the rosette that we created so that's gonna be rosette too okay now every once in a while you want to save this project and then update it what that does is it updates all these oriented selection
+
+00:11:14
+sets so then you can go on to creating a modeling group this essentially defines all of the plies and the core and how the layup is structured so we're just gonna leave it at the default name of modeling Group 1 and right click on one modeling group one create ply so now we're gonna do is select the oriented selection sets so click inside the square brackets and work for this example we're going to want to select the oriented selection set called all next for the ply material as you can see
+
+00:11:52
+we have the options of honeycomb prepreg and then the stack up we're gonna want to use that stack up that we created before so we don't have to go ahead and define five nuclides finally we leave the ply angle at zero because we had already defined those angles in the stack up so I'm gonna click OK and if we update that you click on this little plus next to modeling ply one then another plus you can see that all five of those plies that we had defined in the stack up right here are available right there so next we're
+
+00:12:29
+going to create next supply that'll just be created as modeling plyto and I'm going to select the oriented selection set of edges and then use the same ply material as a stack up leave the plan glide 0.286 core select the oriented selection set of the bottom and then assign the ply material to Honeycomb so then what that means is we don't need to define the ply angle because we're just gonna leave that zero next we're gonna create basically a symmetric set applies similar to modeling Taiwan and modeling
+
+00:13:28
+ply to so that you can go about this is the exact same way oriented selection set edges apply material stack up angle zero and then create your final ply this is gonna be orange selection set all groups oriented selection set all apply material stack up again and imply angle zero let's update that them and as you can see it defines the thicknesses correctly these are all in meters but you can see that the honeycomb is gonna be a thickest because we have a quarter inch thick honeycomb right there save
+
+00:14:08
+the project and then we're going to go back into workbench so next what we're gonna want to do is put all of this set up for ACP pre into static structural so go over to the left side drag static structural and create a new module then what we're gonna want to do is drag click on this setup area and then drag it over to the model since we're using shell elements we're going to transfer only the shell composite data instead of solid so now we can do is update the project and then we're gonna
+
+00:14:45
+go into setup under static structural so double click on that and it will open another version of mechanical that'll allow us to define loads and displacements for different points on this this part it's another we're in static structural if you go to this this left toolbar and expand the imported ply section you can see that ACP has imported all those different plies that we had created before so you can see that there's the core apply and each of these stack applies that we had defined
+
+00:15:19
+next we're going to go into static structural right click on that and we're going to insert fix support for this support we're just going to define it long the top edges of this box so we're gonna want to go into the upper left here and click on the edge selection tool and then just select the edges while holding ctrl and then click on apply so you can see that it selected all each of those edges and those edges are going to be fixed in space so they're not gonna be able to move when
+
+00:15:52
+we put a pressure on this top face and then a force on this side face so next we're gonna go into static structural again insert pressure and then we're gonna want to select a face this time so we're gonna select this bottom face apply and we do want to be defined normal this arrow it looks like it's going to be in the correct direction we're gonna want to apply it that way and then the magnitude of this let's do like about tenth of an atmosphere so you're a point zero 1 1 3 next we're
+
+00:16:34
+going to insert force we're gonna select one of these faces I'm just gonna select this side face we're gonna I'm going to change the defined by two components then we can define it in in the positive z direction so we're gonna call this 200 Newton's in the Z direction as you can see it's going to be a force that's going to be applied all across this face next for the solution we're going to want to right click on that and insert the composite failure tool this is
+
+00:17:16
+bundled with ACP and allows us to add different failure criteria so we're going to right click on composite failure tool insert and safety factor so we have both in the inverse reserve factor and safety factor to actually figure out what failure criteria we want to that click on composite failure tool and for this we're going to use maximum strain maximum stress the Puck failure criteria and then we're also going to want to scroll down to face sheet wrinkling as well as core failure it's
+
+00:18:04
+good to use multiple failure criteria so then we can get a accurate gauge for where and under what modes this material might fail maximum strain and maximum stress are pretty straightforward it's a maximum in plane strain and in plane stress of the materials what's really nice about the puck failure criteria is that it analyzes whether the material is failing under the matrix or the resin or whether it's the actual fibrous material finally if we have a sandwich laminate which we do because we have a core
+
+00:18:42
+that's right in the middle here we're gonna want to also put on face sheet wrinkling which basically basically means buckling of the face sheets and then core failure which would be under compression typically next we're going to also add deformation to the solution as well as mom I see stress for the stress we can define it by the ply but I'm just going to do it for the overall layer now that we have all that we can go up here and click on solve so as we can see here are the results of our analysis if we go into
+
+00:19:30
+total deformation you can see that the most deformation was seen where we applied that tenth of an atmosphere on top there and it appears as though the force along the side did not do too much 200 Newton's is not a whole lot we can also go into the safety factor and as you can see since we had a pretty thick laminate the safety factor is around 5 which is would be fabulous for a part like this so there is if we go back into workbench there is an ACP post option that's basically just a post processor
+
+00:20:09
+for the results that we've seen in stet in mechanical right here it can be more accurate for some more complex structures but at this point we're not going to go into that
+
