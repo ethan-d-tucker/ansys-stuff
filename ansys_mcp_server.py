@@ -783,6 +783,487 @@ def plot_results(
             return _r({"error": f"Both PyVista and APDL plotting failed: {e}; {e2}"})
 
 
+# ===========================  RESULT AGGREGATION  ============================
+
+@mcp.tool()
+def get_participation_factors(num_modes: int = 20) -> str:
+    """Extract modal participation factors from a completed PSD/spectrum analysis.
+
+    Participation factors quantify how strongly each mode is excited by the
+    base excitation. Available after a spectrum (PSD) solve.
+
+    Args:
+        num_modes: Maximum number of modes to query (default 20).
+
+    Returns:
+        JSON with list of {mode, frequency_hz, participation_factor_y, modal_mass_ratio_y}.
+    """
+    m = _get_mapdl()
+    m.post1()
+
+    factors = []
+    all_zero = True
+    for i in range(1, num_modes + 1):
+        try:
+            m.set(1, i)
+            freq = m.get("FREQ_VAL", "ACTIVE", 0, "SET", "FREQ")
+            if float(freq) == 0.0 and i > 1:
+                break
+            pf_y = m.get("PF_Y", "MODE", i, "PFACT", "Y")
+            emr_y = m.get("EMR_Y", "MODE", i, "MEFF", "Y")
+            pf_val = float(pf_y)
+            if pf_val != 0.0:
+                all_zero = False
+            factors.append({
+                "mode": i,
+                "frequency_hz": round(float(freq), 4),
+                "participation_factor_y": pf_val,
+                "modal_mass_ratio_y": round(float(emr_y), 8),
+            })
+        except Exception as e:
+            logger.warning(f"Could not get participation factor for mode {i}: {e}")
+            break
+
+    m.finish()
+
+    result = {
+        "modes_found": len(factors),
+        "excitation_direction": "Y",
+        "factors": factors,
+    }
+    if all_zero and factors:
+        result["warning"] = (
+            "All participation factors are zero — PSD solve may not have run, "
+            "or SPOPT was called without the 'ON' flag for element results."
+        )
+    return _r(result)
+
+
+@mcp.tool()
+def export_result_images(
+    output_dir: str,
+    results: Optional[list] = None,
+) -> str:
+    """Batch export contour plot images for multiple result types.
+
+    Args:
+        output_dir: Directory where PNG files will be saved (created if absent).
+        results: List of result specs, each a dict with "type" ("stress" or
+                 "displacement") and "component" (e.g. "EQV", "X", "Y", "Z",
+                 "XY", "XZ", "YZ", "NORM"). If omitted, exports a standard set
+                 covering von Mises stress, stress components X/Y/Z, and
+                 displacement Y and magnitude.
+
+    Returns:
+        JSON with list of exported files and their max values.
+    """
+    DEFAULT_RESULTS = [
+        {"type": "stress",       "component": "EQV"},
+        {"type": "stress",       "component": "X"},
+        {"type": "stress",       "component": "Y"},
+        {"type": "stress",       "component": "Z"},
+        {"type": "displacement", "component": "Y"},
+        {"type": "displacement", "component": "NORM"},
+    ]
+
+    m = _get_mapdl()
+    os.makedirs(output_dir, exist_ok=True)
+
+    if results is None:
+        results = DEFAULT_RESULTS
+
+    m.post1()
+    try:
+        m.set("LAST")
+    except Exception:
+        try:
+            m.set(2, 1)
+        except Exception:
+            m.set(1, 1)
+    m.allsel()
+
+    exported = []
+    for spec in results:
+        rtype = spec["type"].lower()
+        comp = spec["component"].upper()
+        fname = f"result_{rtype}_{comp.lower()}.png"
+        fpath = os.path.join(output_dir, fname)
+
+        try:
+            if rtype == "displacement":
+                comp_arg = "NORM" if comp == "NORM" else comp
+                disp = m.post_processing.nodal_displacement(comp_arg)
+                m.post_processing.plot_nodal_displacement(
+                    comp_arg,
+                    title=f"1-Sigma Displacement ({comp}) [PSD]",
+                    show_node_numbering=False,
+                    cpos="iso",
+                    screenshot=fpath,
+                    off_screen=True,
+                )
+                max_val = float(np.max(np.abs(disp)))
+                max_display = f"{max_val * 1000:.6f} mm"
+            elif rtype == "stress":
+                if comp == "EQV":
+                    stress = m.post_processing.nodal_eqv_stress()
+                    m.post_processing.plot_nodal_eqv_stress(
+                        title="1-Sigma von Mises Stress [PSD]",
+                        show_node_numbering=False,
+                        cpos="iso",
+                        screenshot=fpath,
+                        off_screen=True,
+                    )
+                else:
+                    stress = m.post_processing.nodal_component_stress(comp)
+                    m.post_processing.plot_nodal_component_stress(
+                        comp,
+                        title=f"1-Sigma Stress ({comp}) [PSD]",
+                        show_node_numbering=False,
+                        cpos="iso",
+                        screenshot=fpath,
+                        off_screen=True,
+                    )
+                max_val = float(np.max(np.abs(stress)))
+                max_display = f"{max_val / 1e6:.4f} MPa"
+            else:
+                exported.append({
+                    "file": fpath, "type": rtype, "component": comp,
+                    "status": "error", "error": f"Unknown type '{rtype}'",
+                })
+                continue
+
+            exported.append({
+                "file": fpath,
+                "type": rtype,
+                "component": comp,
+                "max_absolute": max_val,
+                "max_display": max_display,
+                "status": "ok",
+            })
+        except Exception as e:
+            logger.warning(f"export_result_images failed for {rtype}/{comp}: {e}")
+            exported.append({
+                "file": fpath, "type": rtype, "component": comp,
+                "status": "error", "error": str(e),
+            })
+
+    m.finish()
+
+    successful = sum(1 for x in exported if x["status"] == "ok")
+    return _r({
+        "output_dir": output_dir,
+        "exported": exported,
+        "total": len(exported),
+        "successful": successful,
+        "failed": len(exported) - successful,
+    })
+
+
+@mcp.tool()
+def collect_all_results(
+    output_dir: str,
+    num_modes: int = 20,
+    include_images: bool = True,
+) -> str:
+    """Aggregate all analysis results into a structured JSON file and export images.
+
+    Runs all post-processing queries in a single POST1 session, then writes
+    results.json to output_dir. This is the primary tool to call after solving;
+    the JSON it produces is consumed by generate_report.py to build the HTML report.
+
+    Args:
+        output_dir: Directory for results.json and images/ subdirectory.
+        num_modes: Maximum number of modes to query.
+        include_images: Export contour PNG images to output_dir/images/ (default True).
+
+    Returns:
+        JSON with path to results.json and a summary of what was collected.
+    """
+    import json as _json
+    import datetime
+
+    m = _get_mapdl()
+    os.makedirs(output_dir, exist_ok=True)
+    images_dir = os.path.join(output_dir, "images")
+    if include_images:
+        os.makedirs(images_dir, exist_ok=True)
+
+    errors = []
+    collected = {
+        "metadata": {
+            "generated_at": datetime.datetime.now().isoformat(),
+            "ansys_version": str(getattr(m, "version", "unknown")),
+            "ansys_directory": str(getattr(m, "directory", "unknown")),
+            "output_dir": output_dir,
+            "geometry_file": "WrenchParasolid.x_t",
+        },
+        "analysis_parameters": {
+            "element_type": "SOLID186",
+            "keyopt_3": 1,
+            "num_modes_requested": num_modes,
+            "freq_range_hz": [0.0, 3000.0],
+            "damping_ratio": 0.02,
+            "excitation_direction": "UY",
+            "psd_input_table": [
+                {"frequency_hz": 20.0,   "psd_g2_per_hz": 0.010},
+                {"frequency_hz": 80.0,   "psd_g2_per_hz": 0.040},
+                {"frequency_hz": 350.0,  "psd_g2_per_hz": 0.040},
+                {"frequency_hz": 2000.0, "psd_g2_per_hz": 0.007},
+            ],
+        },
+        "materials": {
+            "mat_1": {
+                "name": "Carbon/Epoxy Woven Prepreg",
+                "EX_pa": 60e9, "EY_pa": 60e9, "EZ_pa": 10e9,
+                "GXY_pa": 5e9, "GXZ_pa": 4e9, "GYZ_pa": 4e9,
+                "PRXY": 0.04, "PRXZ": 0.30, "PRYZ": 0.30,
+                "density_kg_m3": 1420.0,
+            },
+            "mat_2": {
+                "name": "Honeycomb Core (Nomex-style)",
+                "EX_pa": 1e6, "EY_pa": 1e6, "EZ_pa": 130e6,
+                "GXY_pa": 1e6, "GXZ_pa": 24e6, "GYZ_pa": 48e6,
+                "PRXY": 0.49, "PRXZ": 0.001, "PRYZ": 0.001,
+                "density_kg_m3": 48.0,
+            },
+        },
+        "composite_layup": {
+            "section_id": 1,
+            "name": "CompSandwich",
+            "total_thickness_mm": 3.175,
+            "plies": [
+                {"ply": 1,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 0.0,  "material_name": "Carbon/Epoxy"},
+                {"ply": 2,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 0.0,  "material_name": "Carbon/Epoxy"},
+                {"ply": 3,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 45.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 4,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 45.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 5,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 90.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 6,  "mat_id": 2, "thickness_mm": 1.675,"angle_deg": 0.0,  "material_name": "Honeycomb Core"},
+                {"ply": 7,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 90.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 8,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 45.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 9,  "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 45.0, "material_name": "Carbon/Epoxy"},
+                {"ply": 10, "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 0.0,  "material_name": "Carbon/Epoxy"},
+                {"ply": 11, "mat_id": 1, "thickness_mm": 0.15, "angle_deg": 0.0,  "material_name": "Carbon/Epoxy"},
+            ],
+        },
+        "mesh": {},
+        "modal_results": {},
+        "participation_factors": {},
+        "displacement_results": {},
+        "stress_results": {},
+        "images": [],
+        "errors": [],
+    }
+
+    # --- Mesh info ---
+    try:
+        collected["mesh"] = {
+            "nodes": m.mesh.n_node,
+            "elements": m.mesh.n_elem,
+        }
+    except Exception as e:
+        errors.append(f"mesh: {e}")
+
+    # --- Enter POST1 once for all result queries ---
+    m.post1()
+    try:
+        m.set("LAST")
+    except Exception:
+        try:
+            m.set(2, 1)
+        except Exception:
+            m.set(1, 1)
+    m.allsel()
+
+    # --- Natural frequencies ---
+    try:
+        frequencies = []
+        for i in range(1, num_modes + 1):
+            try:
+                m.set(1, i)
+                freq = m.get("FREQ_VAL", "ACTIVE", 0, "SET", "FREQ")
+                if float(freq) == 0.0 and i > 1:
+                    break
+                frequencies.append({"mode": i, "frequency_hz": round(float(freq), 4)})
+            except Exception:
+                break
+        collected["modal_results"] = {"modes_found": len(frequencies), "frequencies": frequencies}
+    except Exception as e:
+        errors.append(f"modal_results: {e}")
+
+    # --- Participation factors ---
+    try:
+        factors = []
+        for i in range(1, num_modes + 1):
+            try:
+                m.set(1, i)
+                freq = m.get("FREQ_VAL", "ACTIVE", 0, "SET", "FREQ")
+                if float(freq) == 0.0 and i > 1:
+                    break
+                pf_y = m.get("PF_Y", "MODE", i, "PFACT", "Y")
+                emr_y = m.get("EMR_Y", "MODE", i, "MEFF", "Y")
+                factors.append({
+                    "mode": i,
+                    "frequency_hz": round(float(freq), 4),
+                    "participation_factor_y": float(pf_y),
+                    "modal_mass_ratio_y": round(float(emr_y), 8),
+                })
+            except Exception:
+                break
+        collected["participation_factors"] = {
+            "modes_found": len(factors),
+            "excitation_direction": "Y",
+            "factors": factors,
+        }
+    except Exception as e:
+        errors.append(f"participation_factors: {e}")
+
+    # Restore to last result set before extracting field results
+    try:
+        m.set("LAST")
+    except Exception:
+        try:
+            m.set(2, 1)
+        except Exception:
+            m.set(1, 1)
+    m.allsel()
+
+    # --- Displacement results ---
+    disp_data = {}
+    for comp in ["Y", "NORM", "X", "Z"]:
+        try:
+            comp_arg = "NORM" if comp == "NORM" else comp
+            disp = m.post_processing.nodal_displacement(comp_arg)
+            max_val = float(np.max(np.abs(disp)))
+            disp_data[comp] = {
+                "component": comp,
+                "max_absolute": max_val,
+                "max_absolute_mm": round(max_val * 1000, 6),
+                "max_absolute_um": round(max_val * 1e6, 4),
+                "min": float(np.min(disp)),
+                "max": float(np.max(disp)),
+                "mean": float(np.mean(disp)),
+            }
+        except Exception as e:
+            errors.append(f"displacement/{comp}: {e}")
+    collected["displacement_results"] = disp_data
+
+    # --- Stress results ---
+    stress_data = {}
+    for comp in ["EQV", "X", "Y", "Z"]:
+        try:
+            if comp == "EQV":
+                stress = m.post_processing.nodal_eqv_stress()
+            else:
+                stress = m.post_processing.nodal_component_stress(comp)
+            max_val = float(np.max(np.abs(stress)))
+            stress_data[comp] = {
+                "component": comp,
+                "max_absolute_pa": max_val,
+                "max_absolute_mpa": round(max_val / 1e6, 4),
+                "min_pa": float(np.min(stress)),
+                "max_pa": float(np.max(stress)),
+            }
+        except Exception as e:
+            errors.append(f"stress/{comp}: {e}")
+    collected["stress_results"] = stress_data
+
+    m.finish()
+
+    # --- Image export ---
+    if include_images:
+        DEFAULT_RESULTS = [
+            {"type": "stress",       "component": "EQV"},
+            {"type": "stress",       "component": "X"},
+            {"type": "stress",       "component": "Y"},
+            {"type": "stress",       "component": "Z"},
+            {"type": "displacement", "component": "Y"},
+            {"type": "displacement", "component": "NORM"},
+        ]
+        m.post1()
+        try:
+            m.set("LAST")
+        except Exception:
+            try:
+                m.set(2, 1)
+            except Exception:
+                m.set(1, 1)
+        m.allsel()
+
+        for spec in DEFAULT_RESULTS:
+            rtype = spec["type"].lower()
+            comp = spec["component"].upper()
+            fpath = os.path.join(images_dir, f"result_{rtype}_{comp.lower()}.png")
+            try:
+                if rtype == "displacement":
+                    comp_arg = "NORM" if comp == "NORM" else comp
+                    disp = m.post_processing.nodal_displacement(comp_arg)
+                    m.post_processing.plot_nodal_displacement(
+                        comp_arg, title=f"1-Sigma Displacement ({comp}) [PSD]",
+                        show_node_numbering=False, cpos="iso",
+                        screenshot=fpath, off_screen=True,
+                    )
+                    max_val = float(np.max(np.abs(disp)))
+                    max_display = f"{max_val * 1000:.6f} mm"
+                else:
+                    if comp == "EQV":
+                        stress = m.post_processing.nodal_eqv_stress()
+                        m.post_processing.plot_nodal_eqv_stress(
+                            title="1-Sigma von Mises Stress [PSD]",
+                            show_node_numbering=False, cpos="iso",
+                            screenshot=fpath, off_screen=True,
+                        )
+                    else:
+                        stress = m.post_processing.nodal_component_stress(comp)
+                        m.post_processing.plot_nodal_component_stress(
+                            comp, title=f"1-Sigma Stress ({comp}) [PSD]",
+                            show_node_numbering=False, cpos="iso",
+                            screenshot=fpath, off_screen=True,
+                        )
+                    max_val = float(np.max(np.abs(stress)))
+                    max_display = f"{max_val / 1e6:.4f} MPa"
+
+                collected["images"].append({
+                    "file": fpath, "type": rtype, "component": comp,
+                    "max_display": max_display, "status": "ok",
+                })
+            except Exception as e:
+                logger.warning(f"collect_all_results image {rtype}/{comp}: {e}")
+                errors.append(f"image/{rtype}/{comp}: {e}")
+                collected["images"].append({
+                    "file": fpath, "type": rtype, "component": comp,
+                    "status": "error", "error": str(e),
+                })
+
+        m.finish()
+
+    collected["errors"] = errors
+
+    # Write results.json
+    results_path = os.path.join(output_dir, "results.json")
+    try:
+        with open(results_path, "w") as f:
+            _json.dump(collected, f, indent=2, default=str)
+    except Exception as e:
+        return _r({"status": "error", "error": f"Could not write results.json: {e}"})
+
+    modes_found = collected["modal_results"].get("modes_found", 0)
+    images_exported = sum(1 for img in collected["images"] if img["status"] == "ok")
+
+    return _r({
+        "status": "ok",
+        "results_json": results_path,
+        "output_dir": output_dir,
+        "images_dir": images_dir if include_images else None,
+        "summary": {
+            "modes_found": modes_found,
+            "images_exported": images_exported,
+            "displacement_components": list(collected["displacement_results"].keys()),
+            "stress_components": list(collected["stress_results"].keys()),
+        },
+        "errors": errors,
+    })
+
+
 # ===========================  ESCAPE HATCH  =================================
 
 @mcp.tool()

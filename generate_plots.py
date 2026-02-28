@@ -1,4 +1,5 @@
 """Generate result plots for the composite wrench PSD analysis."""
+import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -133,7 +134,7 @@ honey_patch = mpatches.Patch(facecolor='#FFD700', edgecolor='black', label='Hone
 ax4.legend(handles=[carbon_patch, honey_patch], loc='upper left', fontsize=8)
 
 plt.tight_layout(rect=[0, 0, 1, 0.95])
-output_path = r'c:\Users\EthanTucker\OneDrive - zden\Desktop\ansys\psd_analysis_results.png'
+output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'psd_analysis_results.png')
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"Plot saved to: {output_path}")

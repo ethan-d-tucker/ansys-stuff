@@ -44,7 +44,7 @@ except ImportError:
 # ===========================  CONFIGURATION  ===============================
 
 # Path to Parasolid geometry file
-PARASOLID_FILE = r"C:\Users\EthanTucker\Downloads\heavyDutyWrench.x_t"
+PARASOLID_FILE = r"C:\Users\Ethan\Desktop\Ansys Stuff\WrenchParasolid.x_t"
 
 # Material 1 -- Epoxy carbon woven prepreg (fabric 0.286 mm ply)
 MAT1 = {
@@ -158,7 +158,8 @@ def main():
         run_location=None,          # use a temporary directory
         override=True,              # kill any zombie MAPDL processes
         loglevel="WARNING",         # reduce console noise
-        additional_switches="-smp", # shared-memory parallel for speed
+        start_timeout=120,          # allow 2 min for gRPC startup
+        # Note: -smp omitted — it can interfere with gRPC on Student edition
     )
 
     print(f"MAPDL version : {mapdl.version}")
@@ -172,23 +173,29 @@ def main():
     mapdl.prep7()
     mapdl.units("SI")  # Ensure SI unit system (metres, kg, seconds, Pa)
 
-    # Import the Parasolid file.
-    # ~PARAIN is the standard APDL command for Parasolid import.
-    # Arguments: filename, extension, path, entity-type (0=auto),
-    #            blank, blank, merge-coincident-keypoints (1=yes)
-    # We split the path and filename for the command.
-    import os
-    para_dir  = os.path.dirname(PARASOLID_FILE).replace("\\", "/")
-    para_name = os.path.splitext(os.path.basename(PARASOLID_FILE))[0]
-    para_ext  = os.path.splitext(os.path.basename(PARASOLID_FILE))[1].lstrip(".")
+    # Import geometry via ANF (ANSYS Neutral Format) fallback.
+    # ~PARAIN requires the Parasolid Geometry Interface DLL which is NOT
+    # included in ANSYS Student.  Instead we replay the pre-extracted ANF
+    # commands stored in anf_commands.json (generated from the same geometry).
+    # UAnFinLib.dll (the ANF reader) IS present in Student.
+    import os, json, shutil
 
-    print(f"File: {PARASOLID_FILE}")
-    print(f"  Directory : {para_dir}")
-    print(f"  Name      : {para_name}")
-    print(f"  Extension : {para_ext}")
+    script_dir   = os.path.dirname(os.path.abspath(__file__))
+    anf_json_src = os.path.join(script_dir, "anf_commands.json")
+    mapdl_dir    = mapdl.directory
 
-    # Use ~PARAIN for Parasolid import
-    mapdl.run(f"~PARAIN,'{para_name}','{para_ext}','{para_dir}/',,0,0,1")
+    with open(anf_json_src) as _f:
+        anf_cmds = json.load(_f)
+
+    # Write commands to a .anf file inside MAPDL's temp working directory
+    anf_dest = os.path.join(mapdl_dir, "wrench_geom.anf")
+    with open(anf_dest, "w") as _f:
+        _f.write("\n".join(anf_cmds) + "\n")
+
+    print(f"Geometry: {len(anf_cmds)} ANF commands -> {anf_dest}")
+
+    # Load the ANF file — UAnFinLib.dll parses it and populates the DB
+    mapdl.run("/INPUT,wrench_geom,anf")
 
     # Verify geometry was imported
     mapdl.allsel()

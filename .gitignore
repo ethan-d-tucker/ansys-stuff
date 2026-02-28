@@ -3,3 +3,4 @@ __pycache__/
 ansys_env/
 .claude/
 .mcp.json
+report_output/
